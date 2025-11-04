@@ -146,7 +146,7 @@ class TravelAgent:
                 self.session_messages.add_ai_message(response_text)
 
                 return response_text
-            hj
+
             self.extracted_info = clarification_result.get('extracted_info', {})
             self._log_progress(f"✅ Extracted Info: {json.dumps(self.extracted_info, indent=2)}")
             
@@ -576,8 +576,9 @@ class TravelAgent:
             tools = [types.Tool(googleSearch=types.GoogleSearch())]
         else:
             tools = []
+        gemini_tools = [types.Tool(googleSearch=types.GoogleSearch())]
 
-        return tools
+        return gemini_tools
     
     def _get_generate_config(self, tools, instruction, thinking_budget = 0, res_type = "text/plain"):
         if thinking_budget == 0 and GEMINI_MODEL == "gemini-2.5-pro":
