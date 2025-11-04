@@ -1,0 +1,25 @@
+# Flask Web Framework
+Flask>=3.0.0
+flask-cors>=4.0.0
+gunicorn>=21.2.0
+loguru>=0.7.0
+# Google Generative AI (Gemini)
+google-genai>=0.2.0
+google-generativeai>=0.3.0
+
+# LangChain for chat history management
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-core>=0.1.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Templating
+Jinja2>=3.1.2
+
+# PDF Generation
+reportlab>=4.0.0
+
+# Utilities
+python-dotenv>=1.0.0
