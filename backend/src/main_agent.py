@@ -17,6 +17,7 @@ import hashlib
 from google import genai
 # Import from existing structure
 from src.chat_history import SQLCache, SessionMessages
+from src.state_manager import StateManager
 from schema.api_structure import UNIFIED_TRAVEL_API
 from promptStore.agent_prompt import TravelAgentPrompts
 from schema.travel_classes import Task, TaskIteration
@@ -48,6 +49,9 @@ class TravelAgent:
         # Core components
         self.api_structure = UNIFIED_TRAVEL_API
         self.prompts = TravelAgentPrompts()
+        
+        # State management - Root Agent is the only state writer
+        self.state_manager = StateManager(session_id=session_id, cache=self.cache)
         
         # State management
         self.iterations: List[TaskIteration] = []
@@ -147,12 +151,20 @@ class TravelAgent:
                 return response_text
 
             self.extracted_info = clarification_result.get('extracted_info', {})
+            current_state = clarification_result.get('current_state', self.state_manager.get_state())
             self._log_progress(f"✅ Extracted Info: {json.dumps(self.extracted_info, indent=2)}")
             
-            # Step 2: Travel Planner - Create task structure
+            # Step 2: Travel Planner - Create task structure (receives state, returns proposed diff)
             self._log_progress("📋 Creating travel plan...")
             
-            task_structure = self._travel_planner()
+            planner_result = self._travel_planner(current_state)
+            task_structure = planner_result.get('task_structure', {})
+            proposed_state_diff = planner_result.get('proposed_state_diff', {})
+            
+            # Root Agent commits planner's proposed state updates
+            if proposed_state_diff.get('proposed_updates'):
+                self.state_manager.update_state(proposed_state_diff['proposed_updates'])
+                self._log_progress("✅ State updated with planner proposals")
             total_tasks = sum(len(tasks) for tasks in task_structure.values())
             self._log_progress(f"✅ Created {total_tasks} tasks across {len(task_structure)} categories")
             
@@ -188,7 +200,17 @@ class TravelAgent:
                     self._log_progress("⚠️ No tasks completed, stopping iterations")
                     break
                 
-                next_steps = self._determine_next_steps(task_structure)
+                # Get current state before determining next steps
+                current_state = self.state_manager.get_state()
+                
+                next_steps_result = self._determine_next_steps(task_structure, current_state)
+                next_steps = next_steps_result.get('next_steps', {})
+                proposed_state_diff = next_steps_result.get('proposed_state_diff', {})
+                
+                # Root Agent commits next steps proposed state updates
+                if proposed_state_diff.get('proposed_updates'):
+                    self.state_manager.update_state(proposed_state_diff['proposed_updates'])
+                    self._log_progress("✅ State updated with next steps proposals")
                 
                 if not next_steps.get('needs_additional_tasks'):
                     self._log_progress("✅ All necessary tasks completed!")
@@ -207,10 +229,18 @@ class TravelAgent:
                     self._log_progress("✅ No more pending tasks")
                     break
             
-            # Step 4: Generate final summary
+            # Step 4: Generate final summary (Final Agent receives state, returns summary + proposed diff)
             self._log_progress("✨ Preparing your travel plan...")
             
-            final_summary = self._generate_final_summary()
+            current_state = self.state_manager.get_state()
+            final_result = self._generate_final_summary(current_state)
+            final_summary = final_result.get('summary', '')
+            proposed_state_diff = final_result.get('proposed_state_diff', {})
+            
+            # Root Agent commits final agent's proposed state updates (e.g., mark tasks as done)
+            if proposed_state_diff.get('proposed_updates'):
+                self.state_manager.update_state(proposed_state_diff['proposed_updates'])
+                self._log_progress("✅ State updated with final summary proposals")
             
             # Save to chat history
             self._save_to_history(final_summary)
@@ -242,17 +272,76 @@ class TravelAgent:
             return error_message
     
     def _root_agent(self, thinking_budget) -> Dict[str, Any]:
-        """Root agent for clarification"""
+        """
+        Root Agent - The only state writer
+        Responsibilities:
+        1. Interpret user message
+        2. Extract intent, high-level task, required modifications
+        3. Update global state (tasks, travel_info, user_profile)
+        4. Return enriched state + analysis result
+        """
+        # Get current state (read-only for analysis)
+        current_state = self.state_manager.get_state()
+        
         # Get chat history
         chat_history = self.session_messages.get_message_dicts()
         
         prompt, instructions = self.prompts.get_root_agent_prompt(
             self.user_query, 
-            chat_history
+            chat_history,
+            current_state  # Pass current state to Root Agent
         )
         
         response = self._call_llm(prompt, instructions, True, thinking_budget)
         result = self._parse_json_response(response)
+        
+        # Root Agent updates state based on analysis
+        if result.get('has_sufficient_info'):
+            # Extract information
+            extracted_info = result.get('extracted_info', {})
+            intent = result.get('intent', '')
+            
+            # Update state.travel_info with extracted information
+            travel_info_updates = {}
+            if extracted_info.get('origin'):
+                travel_info_updates['origin'] = extracted_info['origin']
+            if extracted_info.get('destination'):
+                travel_info_updates['destination'] = extracted_info['destination']
+            if extracted_info.get('departure_date'):
+                travel_info_updates['start_date'] = extracted_info['departure_date']
+            if extracted_info.get('return_date'):
+                travel_info_updates['end_date'] = extracted_info['return_date']
+            
+            if travel_info_updates:
+                self.state_manager.update_travel_info(travel_info_updates)
+            
+            # Update user_profile if preferences are mentioned
+            profile_updates = {}
+            if extracted_info.get('preferences'):
+                # Store preferences in user_profile
+                profile_updates['likes'] = extracted_info.get('preferences', [])
+            if extracted_info.get('budget_range'):
+                profile_updates['price_sensitivity'] = [extracted_info['budget_range']]
+            
+            if profile_updates:
+                self.state_manager.update_user_profile(profile_updates)
+            
+            # Record user intention in state.tasks
+            task_id = f"task_{datetime.now().timestamp()}"
+            user_task = {
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat(),
+                "agent_origin": "root_agent",
+                "intent": intent,
+                "status": "in_progress",
+                "metadata": {
+                    "user_query": self.user_query,
+                    "extracted_info": extracted_info,
+                    "reasoning": result.get('reasoning', '')
+                }
+            }
+            
+            self.state_manager.add_task(user_task)
         
         # Store agent decision
         self.cache.set(
@@ -261,13 +350,20 @@ class TravelAgent:
             self.session_id
         )
         
+        # Return result with updated state reference
+        result['current_state'] = self.state_manager.get_state()
+        
         return result
     
-    def _travel_planner(self) -> Dict[str, List[Task]]:
-        """Travel planner creates task structure"""
+    def _travel_planner(self, current_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Travel Planner Agent - Can read state, propose updates, add subtasks
+        Returns: task_structure + proposed_state_diff (not modifying state directly)
+        """
         prompt, instructions = self.prompts.get_travel_planner_prompt(
             self.user_query,
-            self.extracted_info
+            self.extracted_info,
+            current_state  # Pass current state to planner
         )
         
         response = self._call_llm(prompt, instructions, False, 0)
@@ -295,6 +391,39 @@ class TravelAgent:
                     print(f"⚠️ Failed to create task: {e}")
                     continue
         
+        # Planner can propose state updates (e.g., add subtasks to state.tasks)
+        proposed_updates = {}
+        
+        # Generate subtasks for state.tasks if planner suggests them
+        if task_json.get('proposed_state_updates'):
+            proposed_updates = task_json.get('proposed_state_updates', {})
+        else:
+            # Default: Add planner's task metadata to state.tasks as subtasks
+            planner_subtasks = []
+            for category, tasks in task_structure.items():
+                for task in tasks:
+                    subtask = {
+                        "task_id": f"subtask_{task.task_id}_{datetime.now().timestamp()}",
+                        "timestamp": datetime.now().isoformat(),
+                        "agent_origin": "planner",
+                        "intent": f"Execute {task.task_name}",
+                        "status": "pending",
+                        "metadata": {
+                            "category": category,
+                            "function": task.function,
+                            "priority": task.priority
+                        }
+                    }
+                    planner_subtasks.append(subtask)
+            
+            if planner_subtasks:
+                proposed_updates = {
+                    "tasks": planner_subtasks
+                }
+        
+        # Generate state diff
+        proposed_state_diff = self.state_manager.get_proposed_state_diff(proposed_updates)
+        
         # Store task plan
         self.cache.set(
             f"task_plan_{datetime.now().timestamp()}",
@@ -302,7 +431,10 @@ class TravelAgent:
             self.session_id
         )
         
-        return task_structure
+        return {
+            "task_structure": task_structure,
+            "proposed_state_diff": proposed_state_diff
+        }
     
     def _execute_tasks_concurrent(self, task_structure: Dict[str, List[Task]]) -> Dict[str, Any]:
         """Execute all pending tasks concurrently"""
@@ -440,8 +572,12 @@ class TravelAgent:
         task.execution_time = time.time() - start_time
         return task.execution_time
     
-    def _determine_next_steps(self, completed_tasks: Dict[str, List[Task]]) -> Dict[str, Any]:
-        """Determine if additional tasks are needed"""
+    def _determine_next_steps(self, completed_tasks: Dict[str, List[Task]], 
+                              current_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Next Steps Agent (Follower) - Can read state, propose updates, add subtasks
+        Returns: next_steps + proposed_state_diff (not modifying state directly)
+        """
         # Filter tasks that require agent callback
         callback_required = {}
         for category, task_list in completed_tasks.items():
@@ -454,14 +590,18 @@ class TravelAgent:
         
         if not callback_required:
             return {
-                'needs_additional_tasks': False,
-                'reasoning': 'No tasks require agent callback',
-                'ready_for_user': True
+                'next_steps': {
+                    'needs_additional_tasks': False,
+                    'reasoning': 'No tasks require agent callback',
+                    'ready_for_user': True
+                },
+                'proposed_state_diff': {}
             }
         
         prompt, instructions = self.prompts.get_next_steps_prompt(
             callback_required,
-            self.user_query
+            self.user_query,
+            current_state  # Pass current state to next steps agent
         )
         
         response = self._call_llm(prompt, instructions)
@@ -487,6 +627,33 @@ class TravelAgent:
                         print(f"⚠️ Failed to create subtask: {e}")
                         continue
         
+        # Next Steps Agent can propose state updates (e.g., update task status, add insights)
+        proposed_updates = {}
+        
+        if next_steps.get('proposed_state_updates'):
+            proposed_updates = next_steps.get('proposed_state_updates', {})
+        else:
+            # Default: Update task statuses or add insights to state
+            if next_steps.get('insights'):
+                # Add insights as annotations to state
+                proposed_updates = {
+                    "tasks": [
+                        {
+                            "task_id": f"insight_{datetime.now().timestamp()}",
+                            "timestamp": datetime.now().isoformat(),
+                            "agent_origin": "next_steps",
+                            "intent": "annotation",
+                            "status": "done",
+                            "metadata": {
+                                "insights": next_steps.get('insights', [])
+                            }
+                        }
+                    ]
+                }
+        
+        # Generate state diff
+        proposed_state_diff = self.state_manager.get_proposed_state_diff(proposed_updates)
+        
         # Store next steps decision
         if self.iterations:
             self.iterations[-1].agent_decisions.append({
@@ -494,13 +661,20 @@ class TravelAgent:
                 'decision': next_steps
             })
         
-        return next_steps
+        return {
+            'next_steps': next_steps,
+            'proposed_state_diff': proposed_state_diff
+        }
     
-    def _generate_final_summary(self) -> str:
-        """Generate final user-friendly summary"""
+    def _generate_final_summary(self, current_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Final Agent - Can read state, propose updates (e.g., mark tasks as done)
+        Returns: summary + proposed_state_diff (not modifying state directly)
+        """
         prompt, instructions = self.prompts.get_final_summary_prompt(
             self.iterations,
-            self.user_query
+            self.user_query,
+            current_state  # Pass current state to final agent
         )
         
         response = self._call_llm(prompt, instructions, True)
@@ -508,7 +682,30 @@ class TravelAgent:
         # Clean up markdown if needed
         summary = response.strip()
         
-        return summary
+        # Final Agent can propose state updates (e.g., mark all tasks as done)
+        # Update existing tasks to mark them as done
+        tasks_to_update = []
+        for task in current_state.get("tasks", []):
+            if task.get("status") != "done":
+                tasks_to_update.append({
+                    "task_id": task.get("task_id"),
+                    "status": "done"
+                })
+        
+        proposed_updates = {}
+        if tasks_to_update:
+            # Create update structure that will merge with existing tasks
+            proposed_updates = {
+                "tasks": tasks_to_update
+            }
+        
+        # Generate state diff
+        proposed_state_diff = self.state_manager.get_proposed_state_diff(proposed_updates) if proposed_updates else {}
+        
+        return {
+            'summary': summary,
+            'proposed_state_diff': proposed_state_diff
+        }
     
     def _merge_tasks(self, existing: Dict[str, List[Task]], 
                      new: Dict[str, List[Task]]) -> Dict[str, List[Task]]:

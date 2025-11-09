@@ -228,7 +228,8 @@ class TravelAgentPrompts:
         self.api_structure = UNIFIED_TRAVEL_API
         self.current_date = datetime.now().strftime("%Y-%m-%d")
     
-    def get_root_agent_prompt(self, user_query: str, chat_history: List[Dict] = None) -> tuple:
+    def get_root_agent_prompt(self, user_query: str, chat_history: List[Dict] = None, 
+                              current_state: Dict[str, Any] = None) -> tuple:
         """Root agent prompt for initial query analysis and clarification"""
         
         chat_context = ""
@@ -238,14 +239,23 @@ class TravelAgentPrompts:
                 role = "User" if msg.get("type") == "human" else "Assistant"
                 chat_context += f"{role}: {msg.get('content', '')}\n"
         
+        state_context = ""
+        if current_state:
+            state_context = f"""
+Current State (for reference):
+{json.dumps(current_state, indent=2)}
+"""
+        
         prompt = f"""
 User Query: {user_query}
 {chat_context}
+{state_context}
 
 Current Date: {self.current_date}
 User Location: Paithan, Maharashtra, India
 
 Analyze the user's travel request and determine if you have enough information to proceed.
+Note: You are the Root Agent - you will update the state after analysis.
 """
         
         system_instruction = f"""
@@ -305,17 +315,29 @@ Return ONLY valid JSON, no markdown or additional text.
         
         return prompt, system_instruction
     
-    def get_travel_planner_prompt(self, user_query: str, extracted_info: Dict[str, Any]) -> tuple:
+    def get_travel_planner_prompt(self, user_query: str, extracted_info: Dict[str, Any],
+                                  current_state: Dict[str, Any] = None) -> tuple:
         """Travel planner prompt for creating task structure"""
         
         # Format API structure for LLM
         api_docs = self._format_api_docs_for_llm()
+        
+        state_context = ""
+        if current_state:
+            state_context = f"""
+Current State (you can read this, but cannot modify directly):
+{json.dumps(current_state, indent=2)}
+
+Note: You can propose state updates in your response, but only the Root Agent will commit them.
+"""
         
         prompt = f"""
 User Request: {user_query}
 
 Extracted Information:
 {json.dumps(extracted_info, indent=2)}
+
+{state_context}
 
 Available APIs:
 {api_docs}
@@ -326,16 +348,24 @@ Create a comprehensive task plan to fulfill this travel request.
 """
         
         system_instruction = """
-You are an intelligent travel planning agent that helps users plan their trips by breaking down their requests into specific tasks and identifying which APIs or AI tools need to be called to fetch real-time data.
+You are an intelligent travel planning agent (Planner Agent) that helps users plan their trips by breaking down their requests into specific tasks and identifying which APIs or AI tools need to be called to fetch real-time data.
+
+**IMPORTANT: You are NOT the Root Agent. You can read state, but you CANNOT modify it directly.**
+- You can READ the current state
+- You can PROPOSE state updates (which the Root Agent will review and commit)
+- You can ADD subtasks to state.tasks as proposals
 
 Your Role
 When a user asks you to help plan a trip or get travel information, you must:
 
-Analyze the user's request - Understand what information they need
-Break down into tasks - Identify specific tasks that need real-time data
-Identify required functions - Determine which API functions or GEMINI tools are needed for each task
-Define request parameters - Extract or infer the necessary input parameters from the user's query
-Plan execution flow - Determine if tasks need to be executed sequentially (when one task depends on another's output)
+1. Analyze the user's request - Understand what information they need
+2. Review current state - Read existing state.tasks, state.travel_info, state.user_profile
+3. Break down into tasks - Identify specific tasks that need real-time data
+4. Identify required functions - Determine which API functions or GEMINI tools are needed for each task
+5. Define request parameters - Extract or infer the necessary input parameters from the user's query
+6. Plan execution flow - Determine if tasks need to be executed sequentially (when one task depends on another's output)
+7. Propose state updates - Suggest additions to state.tasks as subtasks
+
 **Your Output Must Follow This Exact Format:**
 
 ```json
@@ -357,7 +387,22 @@ Plan execution flow - Determine if tasks need to be executed sequentially (when 
   ],
   "hotels": [],
   "trains": [],
-  "maps": []
+  "maps": [],
+  "proposed_state_updates": {
+    "tasks": [
+      {
+        "task_id": "subtask_planner_1",
+        "timestamp": "2025-11-04T10:00:00",
+        "agent_origin": "planner",
+        "intent": "Execute flight search",
+        "status": "pending",
+        "metadata": {
+          "category": "flights",
+          "function": "search_flights_tool"
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -585,7 +630,7 @@ Return ONLY the JSON structure, no markdown or additional text.
         return formatted
     
     def get_next_steps_prompt(self, completed_tasks: Dict[str, List[Task]], 
-                              original_request: str) -> tuple:
+                              original_request: str, current_state: Dict[str, Any] = None) -> tuple:
         """Prompt for determining next steps after API responses"""
         
         # Convert tasks to serializable format
@@ -595,23 +640,42 @@ Return ONLY the JSON structure, no markdown or additional text.
             if callback_tasks:
                 tasks_dict[category] = [task.to_dict() for task in callback_tasks]
         
+        state_context = ""
+        if current_state:
+            state_context = f"""
+Current State (you can read this, but cannot modify directly):
+{json.dumps(current_state, indent=2)}
+
+Note: You can propose state updates in your response, but only the Root Agent will commit them.
+"""
+        
         prompt = f"""
 Original User Request: {original_request}
 
 Completed Tasks Requiring Analysis:
 {json.dumps(tasks_dict, indent=2)}
 
+{state_context}
+
 Based on these results, determine what additional tasks (if any) are needed.
 """
         
         system_instruction = """
-You are analyzing API responses to determine next steps in travel planning.
+You are analyzing API responses to determine next steps in travel planning (Next Steps Agent / Follower Agent).
+
+**IMPORTANT: You are NOT the Root Agent. You can read state, but you CANNOT modify it directly.**
+- You can READ the current state
+- You can PROPOSE state updates (which the Root Agent will review and commit)
+- You can ANNOTATE user intention by adding tasks to state.tasks
+- You can ADD insights as annotations
 
 **Your Role:**
 1. Review responses from tasks where agent_call_required=true
-2. Decide if follow-up actions are needed
-3. Extract specific IDs/data for subtasks
-4. Create new task structure for next iteration
+2. Review current state to understand context
+3. Decide if follow-up actions are needed
+4. Extract specific IDs/data for subtasks
+5. Create new task structure for next iteration
+6. Propose state updates (annotations, insights, task status updates)
 
 **Decision Criteria:**
 
@@ -720,7 +784,21 @@ Use map_tool for nearby or location-based insights.
     "trains": [],
     "maps": []
   },
-  "ready_for_user": true/false
+  "ready_for_user": true/false,
+  "proposed_state_updates": {
+    "tasks": [
+      {
+        "task_id": "insight_nextsteps_1",
+        "timestamp": "2025-11-04T10:00:00",
+        "agent_origin": "next_steps",
+        "intent": "annotation",
+        "status": "done",
+        "metadata": {
+          "insights": ["Key insight 1", "Key insight 2"]
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -737,11 +815,21 @@ Return ONLY valid JSON, no markdown or additional text.
         return prompt, system_instruction
     
     def get_final_summary_prompt(
-        self, all_iterations: List[TaskIteration], original_request: str
+        self, all_iterations: List[TaskIteration], original_request: str,
+        current_state: Dict[str, Any] = None
     ) -> tuple:
         """Prompt for generating a concise, emoji-enhanced travel summary"""
 
         iterations_data = [iteration.to_dict() for iteration in all_iterations]
+
+        state_context = ""
+        if current_state:
+            state_context = f"""
+Current State (you can read this, but cannot modify directly):
+{json.dumps(current_state, indent=2)}
+
+Note: You can propose state updates (e.g., mark tasks as done), but only the Root Agent will commit them.
+"""
 
         prompt = f"""
 Original Request: {original_request}
@@ -749,12 +837,20 @@ Original Request: {original_request}
 All Task Executions & Results:
 {iterations_data}
 
+{state_context}
+
 Create a short, well-structured travel summary with emojis and clear sections.
 Avoid long paragraphs. Keep it concise, friendly, and visually organized.
 """
 
         system_instruction = """
-You are a friendly travel planner summarizing trip details for the user.
+You are a friendly travel planner summarizing trip details for the user (Final Agent).
+
+**IMPORTANT: You are NOT the Root Agent. You can read state, but you CANNOT modify it directly.**
+- You can READ the current state
+- You can PROPOSE state updates (e.g., mark tasks as done)
+- The Root Agent will commit your proposed updates
+
 Output should be **clear text**, not paragraphs — use bullet points, spacing, and emojis.
 
 ✅ **What to Include**

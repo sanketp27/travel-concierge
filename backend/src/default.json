@@ -1,0 +1,46 @@
+{
+    "state": {
+      "user_profile": {
+        "passport_nationality": "",
+        "seat_preference": "",
+        "food_preference": "",
+        "allergies": [],
+        "likes": [],
+        "dislikes": [],
+        "price_sensitivity": [],
+        "home": {
+          "event_type": "home",
+          "address": "",
+          "local_prefer_mode": ""
+        }
+      },
+  
+      "tasks": [
+      ],
+  
+      "travel_info": {
+        "origin": "",
+        "destination": "",
+        "start_date": "",
+        "end_date": "",
+        "itinerary": {},
+        "outbound": {
+          "flight_selection": "",
+          "seat_number": ""
+        },
+        "return": {
+          "flight_selection": "",
+          "seat_number": ""
+        },
+        "hotel": {
+          "hotel_selection": "",
+          "room_selection": ""
+        },
+        "poi": [],
+        "itinerary_datetime": "",
+        "itinerary_start_date": "",
+        "itinerary_end_date": ""
+      }
+    }
+  }
+  
