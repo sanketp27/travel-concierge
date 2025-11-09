@@ -195,15 +195,17 @@ class GoogleMapsService:
     
     def get_forecast(self, lat: float, lng: float) -> Dict[str, Any]:
         """Gets the daily weather forecast for a location."""
-        url = "https://weather.googleapis.com/v1/forecast:lookup"
-        params = {
-            "location.latitude": lat,
-            "location.longitude": lng,
-            "params": ["dailyForecast"],
-            "key": self.api_key # Weather API uses a key in params
+        # Use correct endpoint: weather:lookup (not forecast:lookup)
+        url = "https://weather.googleapis.com/v1/weather:lookup"
+        # Weather API uses POST request with location in body
+        json_data = {
+            "location": {
+                "latitude": lat,
+                "longitude": lng
+            },
+            "extraComputation": ["FORECAST"]
         }
-        # Weather API is a simple GET request
-        return self._make_get_request(url, params=params)
+        return self._make_post_request(url, json_data)
 
     def get_air_quality(self, lat: float, lng: float) -> Dict[str, Any]:
         """Gets the current air quality conditions for a location."""

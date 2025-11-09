@@ -141,7 +141,22 @@ class SQLCache:
         cursor = conn.cursor()
         
         # Convert value to JSON string for storage
-        serialized_value = json.dumps(value)
+        # Use default handler for non-serializable objects
+        def json_serializer(obj):
+            """Custom JSON serializer for objects that aren't JSON serializable."""
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            elif hasattr(obj, '__dict__'):
+                return obj.__dict__
+            else:
+                return str(obj)
+        
+        try:
+            serialized_value = json.dumps(value, default=json_serializer)
+        except (TypeError, ValueError) as e:
+            # If serialization fails, try to convert to string
+            print(f"⚠️ Warning: Failed to serialize value for key {key}: {e}")
+            serialized_value = json.dumps({"error": "Serialization failed", "value": str(value)})
         
         # Calculate expiration time if TTL is provided
         expires_at = time.time() + ttl if ttl else None
@@ -190,7 +205,22 @@ class SQLCache:
         cursor = conn.cursor()
         
         # Convert value to JSON string for storage
-        serialized_value = json.dumps(value)
+        # Use default handler for non-serializable objects
+        def json_serializer(obj):
+            """Custom JSON serializer for objects that aren't JSON serializable."""
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            elif hasattr(obj, '__dict__'):
+                return obj.__dict__
+            else:
+                return str(obj)
+        
+        try:
+            serialized_value = json.dumps(value, default=json_serializer)
+        except (TypeError, ValueError) as e:
+            # If serialization fails, try to convert to string
+            print(f"⚠️ Warning: Failed to serialize org_data for key {key}: {e}")
+            serialized_value = json.dumps({"error": "Serialization failed", "value": str(value)})
         
         # Calculate expiration time if TTL is provided
         expires_at = time.time() + ttl if ttl else None

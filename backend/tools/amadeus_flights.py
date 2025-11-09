@@ -337,13 +337,33 @@ def search_flights_tool(**kwargs) -> Dict[str, Any]:
         adults = kwargs.get('adults', 1)
         children = kwargs.get('children', 0)
         infants = kwargs.get('infants', 0)
+        
+        # Ensure travel_class is uppercase and valid
         travel_class = kwargs.get('travel_class', 'ECONOMY')
+        if isinstance(travel_class, str):
+            travel_class = travel_class.upper()
+        # Valid travel classes: ECONOMY, PREMIUM_ECONOMY, BUSINESS, FIRST
+        valid_classes = ['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST']
+        if travel_class not in valid_classes:
+            travel_class = 'ECONOMY'
+        
+        # Validate max_price - must be numeric, not a string
         max_price = kwargs.get('max_price')
+        if max_price is not None:
+            # If max_price is a string like "economy", remove it
+            if isinstance(max_price, str):
+                try:
+                    # Try to convert to number
+                    max_price = float(max_price)
+                except (ValueError, TypeError):
+                    # If it's not a number (e.g., "economy"), set to None
+                    max_price = None
+            elif not isinstance(max_price, (int, float)):
+                max_price = None
+        
         currency_code = kwargs.get('currency_code', 'INR')
         
-        # Call original implementation
-        
-        
+        # Get airport/city codes
         origin_code = amadeus_flights_service.get_airport_city_code(origin) if len(origin) > 3 else origin
         destination_code = amadeus_flights_service.get_airport_city_code(destination) if len(destination) > 3 else destination
 

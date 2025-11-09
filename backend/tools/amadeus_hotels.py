@@ -82,11 +82,15 @@ class AmadeusHotelsService:
         from a different endpoint, which is more reliable for demonstration purposes.
         """
         try:
-            hotel_list_params = {"cityCode": city_code}
+            # Ensure city_code is valid (3-letter IATA code)
+            if not city_code or len(city_code) != 3:
+                return {"error": f"Invalid city code: {city_code}. Must be a 3-letter IATA code."}
+            
+            hotel_list_params = {"cityCode": city_code.upper()}
             hotel_list_response = self._make_request("/v1/reference-data/locations/hotels/by-city", hotel_list_params)
 
             if not hotel_list_response.get("data"):
-                return {"data": [], "message": "No hotels found in the specified city."}
+                return {"data": [], "message": f"No hotels found in the specified city ({city_code})."}
 
             # Return a structured response simulating a search result
             hotels_found = hotel_list_response["data"][:10]  # Limit to 10 for brevity
@@ -103,12 +107,20 @@ class AmadeusHotelsService:
 
     def get_city_code(self, city_name: str) -> str:
         """Gets the IATA code for a city name."""
-        params = {"keyword": city_name, "subType": "CITY"}
-        result = self._make_request("/v1/reference-data/locations", params)
+        try:
+            params = {"keyword": city_name, "subType": "CITY"}
+            result = self._make_request("/v1/reference-data/locations", params)
 
-        if result and result.get("data"):
-            return result["data"][0]["iataCode"]
-        return city_name # Return original if not found
+            if result and result.get("data") and len(result["data"]) > 0:
+                iata_code = result["data"][0].get("iataCode")
+                if iata_code:
+                    return iata_code
+            # If no IATA code found, return original (might already be a code)
+            return city_name
+        except Exception as e:
+            # If lookup fails, return original (might already be a code)
+            print(f"Warning: Could not get city code for {city_name}: {e}")
+            return city_name
 
     def get_hotel_details(self, hotel_id: str) -> Dict[str, Any]:
         """Gets detailed information about a specific hotel by its ID."""
@@ -142,8 +154,18 @@ def search_hotels_tool(**kwargs) -> Dict[str, Any]:
         if not all([city, check_in_date, check_out_date]):
             return {"error": "Missing required parameters: city, check_in_date, check_out_date"}
 
-        
-        city_code = amadeus_hotels_service.get_city_code(city) if len(city) > 3 else city
+        # Convert city name to IATA city code if needed
+        # If city is already a 3-letter code, use it directly
+        if len(city) == 3 and city.isalpha():
+            city_code = city.upper()
+        else:
+            # Try to get IATA code from city name
+            city_code = amadeus_hotels_service.get_city_code(city)
+            # If conversion failed and it's still not a 3-letter code, return error
+            if len(city_code) != 3:
+                return {
+                    "error": f"Could not find IATA city code for '{city}'. Please provide a valid city name or 3-letter IATA code (e.g., 'DEL' for Delhi, 'BOM' for Mumbai)."
+                }
         
         results = amadeus_hotels_service.search_hotels(
             city_code=city_code,
