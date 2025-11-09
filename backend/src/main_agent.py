@@ -99,7 +99,6 @@ class TravelAgent:
             
             if not clarification_result.get('has_sufficient_info'):
                 self._log_progress("📝 Formulating clarifying questions...")
-                import json
                 analysis_json = json.dumps(clarification_result, indent=2)
 
                 chat_context = ""

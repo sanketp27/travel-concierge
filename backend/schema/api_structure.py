@@ -221,6 +221,33 @@ MAPS_API = {
     }
 }
 
+GEMINI_API = {
+    "search_tool": {
+        "function_name": "search_tool",
+        "description": "Perform a web search using Google Search tool",
+        "request_schema": {
+            "search_query": {"type": "string", "required": True, "example": "Latest news on AI advancements"},
+            "search_instruction": {"type": "string", "required": False, "example": "Provide concise summaries of the top results"}
+        }
+    },
+    "url_context_tool": {
+        "function_name": "url_context_tool",
+        "description": "Fetch and summarize content from a given URL",
+        "request_schema": {
+            "url": {"type": "string", "required": True, "example": "https://www.example.com/article"},
+            "summary_instruction": {"type": "string", "required": False, "example": "Summarize the main points of the article"}
+        }
+    },
+    "map_tool": {
+        "function_name": "map_tool",
+        "description": "Use map tools to find locations and provide recommendations",
+        "request_schema": {
+            "map_search_query": {"type": "string", "required": True, "example": "Best coffee shops near Central Park"},
+            "context_instruction": {"type": "string", "required": False, "example": "Provide a list of top-rated coffee shops with brief descriptions"}
+        }
+    }
+}
+
 # ============================================================================
 # UNIFIED API STRUCTURE
 # ============================================================================
@@ -229,7 +256,8 @@ UNIFIED_TRAVEL_API = {
     "flights": FLIGHTS_API,
     "hotels": HOTELS_API,
     "trains": TRAINS_API,
-    "maps": MAPS_API
+    "maps": MAPS_API,
+    "ai_tools": GEMINI_API
 }
 
 

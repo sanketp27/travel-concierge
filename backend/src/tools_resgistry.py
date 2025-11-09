@@ -14,6 +14,7 @@ try:
     from tools.amadeus_hotels import *
     from tools.indian_railways import *
     from tools.map_tools import *
+    from tools.gemini_tool import *
 except ImportError as e:
     print(f"⚠️ Warning: Some tools failed to import: {e}")
 
@@ -48,6 +49,10 @@ TOOL_REGISTRY: Dict[str, Callable] = {
     "get_route_tool": globals().get("get_route_tool"),
     "optimize_day_trip_tool": globals().get("optimize_day_trip_tool"),
     "get_weather_forecast_tool": globals().get("get_weather_forecast_tool"),
+
+    "search_tool": globals().get("search_tool"),
+    "url_context_tool": globals().get("url_context_tool"),
+    "map_tool": globals().get("map_tool"),
 }
 
 
