@@ -422,17 +422,25 @@ Serach for offers and prices for the flights and hotels or train only if user as
    - `true`: Response needed for next decision (e.g., flight search → then confirm pricing)
    - `false`: Final information retrieval (e.g., weather forecast, place details)
 
-5. **Priority system:**
+5. **CRITICAL: Correct Parameter Usage:**
+   - **confirm_flight_pricing_tool**: Requires `flight_offer` (complete object from search_flights_tool), NOT `flight_offer_id` or hotel params
+   - **get_hotel_details_tool**: Requires `hotel_id` (from API response), NOT flight params or fake IDs
+   - Always extract full objects/IDs from previous API responses
+   - Never generate fake IDs - use actual IDs from search results
+   - Flight tools → Only flight parameters (origin, destination, departure_date, flight_offer)
+   - Hotel tools → Only hotel parameters (city, check_in_date, check_out_date, hotel_id)
+
+6. **Priority system:**
    - Priority 1: Critical data (flight/train search)
    - Priority 2: Important context (hotel search, weather)
    - Priority 3: Nice-to-have (nearby attractions, maps)
 
-6. **Be comprehensive but relevant:**
+7. **Be comprehensive but relevant:**
    - Always include: primary transport (flight/train)
    - Consider adding: hotels (if multi-day trip), weather, key attractions
    - Don't over-fetch: avoid unnecessary API calls
 
-7. **Common mappings:**
+8. **Common mappings:**
    - Mumbai: BOM (airport), BCT/CSTM (train stations)
    - Delhi: DEL (airport), NDLS (train station)
    - Goa: GOI (airport)
@@ -770,17 +778,70 @@ Use map_tool for nearby or location-based insights.
   "new_tasks": {
     "flights": [
       {
-        "task_name": "Confirm pricing for flight",
+        "task_name": "Confirm pricing for selected flight",
         "function": "confirm_flight_pricing_tool",
         "request": {
-          "flight_offer_id": "extracted_from_response"
+          "flight_offer": {
+            "type": "flight-offer",
+            "id": "1",
+            "source": "GDS",
+            "itineraries": [
+              {
+                "duration": "PT2H15M",
+                "segments": [
+                  {
+                    "departure": {
+                      "iataCode": "BOM",
+                      "at": "2025-12-19T10:30:00"
+                    },
+                    "arrival": {
+                      "iataCode": "DEL",
+                      "at": "2025-12-19T12:45:00"
+                    },
+                    "carrierCode": "6E",
+                    "number": "123",
+                    "aircraft": {"code": "320"}
+                  }
+                ]
+              }
+            ],
+            "price": {
+              "currency": "INR",
+              "total": "14875.00",
+              "base": "12000.00"
+            },
+            "validatingAirlineCodes": ["6E"],
+            "travelerPricings": [
+              {
+                "travelerId": "1",
+                "fareOption": "STANDARD",
+                "travelerType": "ADULT",
+                "price": {
+                  "currency": "INR",
+                  "total": "14875.00",
+                  "base": "12000.00"
+                }
+              }
+            ]
+          }
         },
         "response": "",
         "agent_call_required": false,
         "priority": 1
       }
     ],
-    "hotels": [],
+    "hotels": [
+      {
+        "task_name": "Get details for selected hotel",
+        "function": "get_hotel_details_tool",
+        "request": {
+          "hotel_id": "H2S8ENQM1A"
+        },
+        "response": "",
+        "agent_call_required": false,
+        "priority": 1
+      }
+    ],
     "trains": [],
     "maps": []
   },
@@ -802,12 +863,31 @@ Use map_tool for nearby or location-based insights.
 }
 ```
 
+**CRITICAL PARAMETER RULES:**
+
+1. **confirm_flight_pricing_tool**:
+   - REQUIRES: `flight_offer` (complete object from search_flights_tool response)
+   - DO NOT use: `flight_offer_id`, `hotel_id`, `check_in_date`, `check_out_date`
+   - Example: Extract the full flight offer object from search_flights_tool response and pass it as `flight_offer`
+
+2. **get_hotel_details_tool**:
+   - REQUIRES: `hotel_id` (valid Amadeus hotel offer ID from search_hotels_tool response)
+   - DO NOT use: `flight_offer`, `origin`, `destination`, `departure_date`
+   - Example: Extract `hotelId` from search_hotels_tool response (format: 6-15 alphanumeric chars like "H2S8ENQM1A")
+   - DO NOT generate fake IDs - must come from actual API response
+
+3. **Task Routing Validation**:
+   - Flight tools → Only flight parameters
+   - Hotel tools → Only hotel parameters
+   - System will reject wrong parameter combinations
+
 **Important:**
 - Only create subtasks that add real value
 - If any previous tasks failed to retrieve data, then try search_tool and url_context_tool, map_tool to get the required information.
-- Extract actual IDs from responses (flight_offer_id, hotel_id, place_id, etc.)
+- Extract actual objects/IDs from responses (full `flight_offer` object, valid `hotel_id` from API, etc.)
 - Don't create subtasks if response is already comprehensive
 - Set ready_for_user=true when no more useful data can be fetched
+- NEVER generate fake IDs - always use IDs from actual API responses
 
 Return ONLY valid JSON, no markdown or additional text.
 """

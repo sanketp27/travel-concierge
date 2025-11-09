@@ -60,7 +60,10 @@ TOOL_REGISTRY: Dict[str, Callable] = {
 # TOOL EXECUTION WRAPPER
 # ============================================================================ #
 def execute_tool_by_name(function_name: str, parameters: Dict[str, Any]) -> Any:
-    """Execute a registered tool by name with provided parameters."""
+    """
+    Execute a registered tool by name with provided parameters.
+    Includes task routing validation to prevent wrong tool/parameter combinations.
+    """
     print(f"\n🔧 [TOOL CALL] {function_name}")
     if parameters:
         preview = {
@@ -76,6 +79,11 @@ def execute_tool_by_name(function_name: str, parameters: Dict[str, Any]) -> Any:
         if not func:
             available = [k for k, v in TOOL_REGISTRY.items() if v]
             return {"error": f"Function '{function_name}' not found.", "available_functions": available}
+
+        # Task routing validation - prevent wrong tool/parameter combinations
+        routing_error = _validate_task_routing(function_name, parameters)
+        if routing_error:
+            return routing_error
 
         if hasattr(func, "run"):
             result = func.run(**parameters)
@@ -103,3 +111,49 @@ def execute_tool_by_name(function_name: str, parameters: Dict[str, Any]) -> Any:
             "type": type(e).__name__,
             "traceback": traceback.format_exc(),
         }
+
+
+def _validate_task_routing(function_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | None:
+    """
+    Validate task routing to prevent wrong tool/parameter combinations.
+    Returns error dict if validation fails, None if valid.
+    """
+    # Flight tools should not receive hotel parameters
+    flight_tools = ['confirm_flight_pricing_tool', 'search_flights_tool', 'get_flight_offers_tool']
+    hotel_params = ['hotel_id', 'check_in_date', 'check_out_date', 'city']
+    
+    # Hotel tools should not receive flight parameters
+    hotel_tools = ['get_hotel_details_tool', 'search_hotels_tool']
+    flight_params = ['flight_offer', 'flight_offer_id', 'origin', 'destination', 'departure_date']
+    
+    provided_params = set(parameters.keys())
+    
+    # Check flight tools with hotel params
+    if function_name in flight_tools:
+        hotel_params_found = [p for p in hotel_params if p in provided_params]
+        if hotel_params_found:
+            return {
+                "error": f"Task routing error: {function_name} received hotel parameters: {hotel_params_found}",
+                "details": f"This is a flight tool. For hotels, use 'get_hotel_details_tool' or 'search_hotels_tool'.",
+                "provided_params": list(provided_params),
+                "expected_params": {
+                    "confirm_flight_pricing_tool": ["flight_offer"],
+                    "search_flights_tool": ["origin", "destination", "departure_date"]
+                }
+            }
+    
+    # Check hotel tools with flight params
+    if function_name in hotel_tools:
+        flight_params_found = [p for p in flight_params if p in provided_params]
+        if flight_params_found and 'hotel_id' not in provided_params and 'city' not in provided_params:
+            return {
+                "error": f"Task routing error: {function_name} received flight parameters: {flight_params_found}",
+                "details": f"This is a hotel tool. For flights, use 'confirm_flight_pricing_tool' or 'search_flights_tool'.",
+                "provided_params": list(provided_params),
+                "expected_params": {
+                    "get_hotel_details_tool": ["hotel_id"],
+                    "search_hotels_tool": ["city", "check_in_date", "check_out_date"]
+                }
+            }
+    
+    return None

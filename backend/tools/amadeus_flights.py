@@ -525,22 +525,78 @@ def confirm_flight_pricing_tool(**kwargs) -> Dict[str, Any]:
     
     Request Body:
     {
-        "flight_offer_id": str (required)
-        "flight_offer": dict (required) - Complete flight offer object
+        "flight_offer": dict (required) - Complete flight offer object from search_flights_tool response
         "include_credit_card_fees": bool (optional, default=False)
         "include_bags": bool (optional, default=False)
         "include_other_services": bool (optional, default=False)
         "include_detailed_fare_rules": bool (optional, default=False)
         "force_booking_class": bool (optional, default=False)
     }
+    
+    Example flight_offer object:
+    {
+        "type": "flight-offer",
+        "id": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "nonHomogeneous": false,
+        "oneWay": false,
+        "lastTicketingDate": "2025-12-19",
+        "numberOfBookableSeats": 9,
+        "itineraries": [...],
+        "price": {
+            "currency": "INR",
+            "total": "14875.00",
+            "base": "12000.00"
+        },
+        "pricingOptions": {...},
+        "validatingAirlineCodes": ["AI"],
+        "travelerPricings": [...]
+    }
     """
     try:
+        # Validate that this is NOT a hotel request
+        hotel_params = ['hotel_id', 'check_in_date', 'check_out_date', 'city']
+        provided_params = set(kwargs.keys())
+        hotel_params_found = [p for p in hotel_params if p in provided_params]
+        
+        if hotel_params_found:
+            return {
+                "error": f"Invalid parameters for confirm_flight_pricing_tool. Found hotel parameters: {hotel_params_found}. "
+                        f"This tool requires 'flight_offer' (a complete flight offer object from search_flights_tool). "
+                        f"For hotels, use 'get_hotel_details_tool' instead."
+            }
+        
         flight_offer = kwargs.get('flight_offer')
         
         if not flight_offer:
-            return {"error": "Missing required parameter: flight_offer"}
+            return {
+                "error": "Missing required parameter: flight_offer",
+                "details": "This tool requires a complete flight offer object (dict) from search_flights_tool response.",
+                "example": {
+                    "flight_offer": {
+                        "type": "flight-offer",
+                        "id": "1",
+                        "itineraries": [...],
+                        "price": {"currency": "INR", "total": "14875.00"}
+                    }
+                }
+            }
         
+        # Validate flight_offer structure
+        if not isinstance(flight_offer, dict):
+            return {
+                "error": "Invalid flight_offer type. Expected dict, got {}".format(type(flight_offer).__name__)
+            }
         
+        # Check for required flight offer fields
+        required_fields = ['type', 'id', 'itineraries', 'price']
+        missing_fields = [f for f in required_fields if f not in flight_offer]
+        if missing_fields:
+            return {
+                "error": f"Invalid flight_offer structure. Missing required fields: {missing_fields}",
+                "details": "flight_offer must be a complete object from search_flights_tool response"
+            }
         
         # Build include options
         include_options = []

@@ -122,15 +122,50 @@ class AmadeusHotelsService:
             print(f"Warning: Could not get city code for {city_name}: {e}")
             return city_name
 
-    def get_hotel_details(self, hotel_id: str) -> Dict[str, Any]:
-        """Gets detailed information about a specific hotel by its ID."""
-        return self._make_request(f"/v3/shopping/hotel-offers/{hotel_id}")
+    def get_hotel_details(self, hotel_id: str, retry_count: int = 0, max_retries: int = 3) -> Dict[str, Any]:
+        """
+        Gets detailed information about a specific hotel by its ID.
+        Includes retry logic with exponential backoff for rate limiting.
+        """
+        import time
+        
+        # Validate hotel_id format
+        # Valid Amadeus hotel offer IDs are typically 8-10 characters alphanumeric
+        if not hotel_id or not isinstance(hotel_id, str):
+            raise ValueError(f"Invalid hotel_id: {hotel_id}. Must be a non-empty string.")
+        
+        # Basic format validation - Amadeus IDs are usually alphanumeric, 8-10 chars
+        if len(hotel_id) < 6 or len(hotel_id) > 15:
+            raise ValueError(f"Invalid hotel_id format: '{hotel_id}'. Expected 6-15 alphanumeric characters.")
+        
+        # Check for obviously invalid patterns (like fake IDs)
+        if not hotel_id.replace('_', '').replace('-', '').isalnum():
+            raise ValueError(f"Invalid hotel_id format: '{hotel_id}'. Must be alphanumeric.")
+        
+        try:
+            return self._make_request(f"/v3/shopping/hotel-offers/{hotel_id}")
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            # Check for rate limit (429) or temporary errors
+            if ("429" in error_str or "too many requests" in error_str or "rate limit" in error_str) and retry_count < max_retries:
+                # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** retry_count
+                print(f"⚠️ Rate limit hit. Retrying in {wait_time}s (attempt {retry_count + 1}/{max_retries})...")
+                time.sleep(wait_time)
+                return self.get_hotel_details(hotel_id, retry_count + 1, max_retries)
+            
+            # Re-raise other errors
+            raise
 
 
 # --- Agent-Callable Tools ---
 
 # Initialize the service as a singleton to be used by the tool functions
 amadeus_hotels_service = AmadeusHotelsService()
+
+# Cache for hotel details to prevent repeated API calls and rate limiting
+_hotel_details_cache = {}
 
 
 def search_hotels_tool(**kwargs) -> Dict[str, Any]:
@@ -187,20 +222,79 @@ def get_hotel_details_tool(**kwargs) -> Dict[str, Any]:
     
     Request Body:
     {
-        "hotel_id": str (required)
+        "hotel_id": str (required) - Valid Amadeus hotel offer ID from search_hotels_tool response
     }
+    
+    Example:
+    {
+        "hotel_id": "H2S8ENQM1A"  # Valid format: 8-10 alphanumeric characters
+    }
+    
+    Note: hotel_id must come from search_hotels_tool response, not a generated/fake ID.
     """
     try:
+        # Validate that this is NOT a flight request
+        flight_params = ['flight_offer', 'flight_offer_id', 'origin', 'destination', 'departure_date']
+        provided_params = set(kwargs.keys())
+        flight_params_found = [p for p in flight_params if p in provided_params]
+        
+        if flight_params_found and 'hotel_id' not in kwargs:
+            return {
+                "error": f"Invalid parameters for get_hotel_details_tool. Found flight parameters: {flight_params_found}. "
+                        f"This tool requires 'hotel_id' (a valid hotel offer ID from search_hotels_tool). "
+                        f"For flights, use 'confirm_flight_pricing_tool' instead."
+            }
+        
         hotel_id = kwargs.get('hotel_id')
         
         if not hotel_id:
-            return {"error": "Missing required parameter: hotel_id"}
+            return {
+                "error": "Missing required parameter: hotel_id",
+                "details": "This tool requires a valid hotel offer ID from search_hotels_tool response.",
+                "example": {
+                    "hotel_id": "H2S8ENQM1A"  # From search_hotels_tool response
+                }
+            }
         
-
+        # Additional validation
+        if not isinstance(hotel_id, str):
+            return {
+                "error": f"Invalid hotel_id type. Expected string, got {type(hotel_id).__name__}"
+            }
+        
+        # Validate format before making API call
+        if len(hotel_id) < 6 or len(hotel_id) > 15:
+            return {
+                "error": f"Invalid hotel_id format: '{hotel_id}'. Expected 6-15 alphanumeric characters.",
+                "details": "hotel_id must be a valid Amadeus hotel offer ID from search_hotels_tool response."
+            }
+        
+        if not hotel_id.replace('_', '').replace('-', '').isalnum():
+            return {
+                "error": f"Invalid hotel_id format: '{hotel_id}'. Must be alphanumeric.",
+                "details": "hotel_id must be a valid Amadeus hotel offer ID from search_hotels_tool response."
+            }
+        
+        # Check cache first to prevent repeated API calls
+        if hotel_id in _hotel_details_cache:
+            print(f"💾 Using cached hotel details for {hotel_id}")
+            return _hotel_details_cache[hotel_id]
         
         results = amadeus_hotels_service.get_hotel_details(hotel_id)
         
+        # Cache successful results (only if no error)
+        if isinstance(results, dict) and "error" not in results:
+            _hotel_details_cache[hotel_id] = results
+        
         return results
         
+    except ValueError as e:
+        return {"error": str(e)}
     except Exception as e:
+        error_str = str(e).lower()
+        if "429" in error_str or "too many requests" in error_str:
+            return {
+                "error": "Rate limit exceeded. Please wait before retrying.",
+                "details": "Amadeus API rate limit reached. The system will automatically retry with exponential backoff."
+            }
         return {"error": f"Get hotel details failed: {str(e)}"}
